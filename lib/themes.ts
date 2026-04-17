@@ -1,0 +1,105 @@
+import type { Theme, ThemeId } from './types';
+
+/**
+ * Six pixel-art themes for the city. Each theme retints background, fog,
+ * grid, building base/accent, window glow and the gold crown for verified
+ * skyscrapers. Hex strings are consumed directly by Three.js (which will
+ * parse them via THREE.Color).
+ */
+export const THEMES: Record<ThemeId, Theme> = {
+  neon: {
+    id: 'neon',
+    label: 'Neon',
+    background: '#0d1117',
+    fog: '#0d1117',
+    ground: '#0a0e13',
+    gridLine: '#1c2740',
+    buildingBase: '#1c2128',
+    buildingAccent: '#ff3fa4',
+    windowGlow: '#00d4ff',
+    crown: '#ffd700',
+    skyTop: '#0a0e13',
+    skyBottom: '#1a0f2e',
+  },
+  matrix: {
+    id: 'matrix',
+    label: 'Matrix',
+    background: '#000000',
+    fog: '#000000',
+    ground: '#001100',
+    gridLine: '#003300',
+    buildingBase: '#0a1a0a',
+    buildingAccent: '#00ff41',
+    windowGlow: '#39ff14',
+    crown: '#9fff9f',
+    skyTop: '#000000',
+    skyBottom: '#001a00',
+  },
+  noir: {
+    id: 'noir',
+    label: 'Noir',
+    background: '#0a0a0a',
+    fog: '#0a0a0a',
+    ground: '#111111',
+    gridLine: '#2a2a2a',
+    buildingBase: '#1a1a1a',
+    buildingAccent: '#555555',
+    windowGlow: '#e6e6e6',
+    crown: '#ffffff',
+    skyTop: '#000000',
+    skyBottom: '#1a1a1a',
+  },
+  sunset: {
+    id: 'sunset',
+    label: 'Sunset',
+    background: '#1a0f0a',
+    fog: '#2a150a',
+    ground: '#2a1808',
+    gridLine: '#4a2a15',
+    buildingBase: '#3a1f10',
+    buildingAccent: '#ff6b35',
+    windowGlow: '#ffa500',
+    crown: '#ffcc00',
+    skyTop: '#2a0e1a',
+    skyBottom: '#ff6b35',
+  },
+  ocean: {
+    id: 'ocean',
+    label: 'Ocean',
+    background: '#031724',
+    fog: '#052033',
+    ground: '#021420',
+    gridLine: '#0a3a5a',
+    buildingBase: '#0a2235',
+    buildingAccent: '#1ecbe1',
+    windowGlow: '#66e0ff',
+    crown: '#aaf6ff',
+    skyTop: '#020e1b',
+    skyBottom: '#063c5a',
+  },
+  gold: {
+    id: 'gold',
+    label: 'Gold',
+    background: '#1a1405',
+    fog: '#1a1405',
+    ground: '#140f03',
+    gridLine: '#3a2f10',
+    buildingBase: '#2a2010',
+    buildingAccent: '#ffd700',
+    windowGlow: '#fff1a8',
+    crown: '#ffe066',
+    skyTop: '#0e0a03',
+    skyBottom: '#3a2a08',
+  },
+};
+
+export const DEFAULT_THEME: ThemeId = 'neon';
+
+export const THEME_ORDER: ThemeId[] = [
+  'neon',
+  'matrix',
+  'noir',
+  'sunset',
+  'ocean',
+  'gold',
+];
