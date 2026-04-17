@@ -17,11 +17,20 @@ type Step = 'intro' | 'handle' | 'success';
  * Three screens:
  *  1. intro   — explainer + "CONTINUE WITH @X"
  *  2. handle  — enter/confirm handle, validated against mock data
- *  3. success — claimed, offers a 500 ✨ welcome bonus
+ *  3. success — claimed, offers a 500 ✨ welcome bonus (idempotent)
  *
  * Fully self-contained: reads its open state from the city store, so
  * any button anywhere in the app can flip `claimModalOpen` and get the
  * same UX.
+ *
+ * Bonus idempotency
+ * -----------------
+ * The 500 ✨ bonus is credited via `grantWelcomeBonus(handle)` on the
+ * store, which flips `welcomeBonusGranted[handle]` atomically. Once
+ * set, any subsequent re-open of the modal for that handle renders
+ * `ALREADY CLAIMED · +500 ✨` instead of the credit CTA — so closing
+ * the modal before clicking the CTA doesn't lose the bonus, but
+ * re-opening doesn't double-credit either.
  */
 export default function ClaimModal() {
   const router = useRouter();
@@ -31,8 +40,9 @@ export default function ClaimModal() {
   const setSeed = useCityStore((s) => s.setClaimModalSeed);
 
   const claim = useSocialStore((s) => s.claim);
-  const addKudos = useSocialStore((s) => s.addKudos);
+  const grantWelcomeBonus = useSocialStore((s) => s.grantWelcomeBonus);
   const claimed = useSocialStore((s) => s.claimed);
+  const welcomeBonusGranted = useSocialStore((s) => s.welcomeBonusGranted);
 
   const [step, setStep] = useState<Step>('intro');
   const [handle, setHandle] = useState<string>('');
@@ -72,15 +82,34 @@ export default function ClaimModal() {
     setStep('success');
   };
 
+  // Pre-computed claimed handle (either just-set or already existing) so
+  // the success step always has something to show even before the
+  // store-update re-renders.
+  const claimedHandle =
+    claimed?.username ?? handle.replace(/^@/, '').toLowerCase().trim();
+
+  const alreadyGotBonus =
+    !!claimedHandle && welcomeBonusGranted[claimedHandle] === true;
+
   const grantBonus = () => {
-    addKudos(500);
-    showToast('WELCOME BONUS · +500 ✨');
+    // Atomic check-and-credit. If another copy of this flow already
+    // credited (or a stray click fired twice), `grantWelcomeBonus`
+    // returns false and we just toast the existing state.
+    const credited = grantWelcomeBonus(claimedHandle);
+    showToast(
+      credited
+        ? 'WELCOME BONUS · +500 ✨'
+        : 'ALREADY CLAIMED · +500 ✨',
+    );
     // Close & navigate to the claimed building after a beat so the
     // toast is visible to the user.
     window.setTimeout(() => {
       onClose();
       if (claimed?.username) router.push(`/u/${claimed.username}`);
-      else if (handle) router.push(`/u/${handle.replace(/^@/, '').toLowerCase().trim()}`);
+      else if (handle)
+        router.push(
+          `/u/${handle.replace(/^@/, '').toLowerCase().trim()}`,
+        );
     }, 700);
   };
 
@@ -88,11 +117,6 @@ export default function ClaimModal() {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2200);
   };
-
-  // Pre-computed claimed handle (either just-set or already existing) so
-  // the success step always has something to show even before the
-  // store-update re-renders.
-  const claimedHandle = claimed?.username ?? handle.replace(/^@/, '').toLowerCase().trim();
 
   const title = useMemo(() => {
     switch (step) {
@@ -196,15 +220,32 @@ export default function ClaimModal() {
               <div className="uppercase tracking-widest text-[10px] text-text-muted mb-1">
                 Welcome bonus
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <span>+500 ✨ kudos</span>
-                <PixelButton variant="glow" size="sm" onClick={grantBonus}>
-                  Give yourself 500 ✨
-                </PixelButton>
+                {alreadyGotBonus ? (
+                  <span
+                    aria-label="Welcome bonus already claimed"
+                    className={clsx(
+                      'px-3 py-2 text-[10px] uppercase tracking-widest',
+                      'border-[2px] border-text-muted/40',
+                      'text-text-muted cursor-not-allowed select-none',
+                    )}
+                  >
+                    Already claimed · +500 ✨
+                  </span>
+                ) : (
+                  <PixelButton
+                    variant="glow"
+                    size="sm"
+                    onClick={grantBonus}
+                  >
+                    Give yourself 500 ✨
+                  </PixelButton>
+                )}
               </div>
             </div>
             <PixelButton variant="ghost" onClick={onClose} className="w-full">
-              Skip
+              {alreadyGotBonus ? 'Close' : 'Skip'}
             </PixelButton>
           </div>
         )}

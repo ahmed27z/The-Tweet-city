@@ -1,26 +1,16 @@
 'use client';
 
-import { useEffect } from 'react';
 import TopBar from './TopBar';
 
 /**
- * Sub-page shell: renders the TopBar and flips <body> to `sub-page`
- * mode while mounted. Pages like /u/:handle, /compare, /leaderboard
- * and /explore are normal scrolling documents, unlike the full-screen
- * city homepage.
+ * Sub-page shell: renders the TopBar and a scrollable `<main>`. Used by
+ * /u/:handle, /compare, /leaderboard and /explore.
  *
- * Keeping this in one place means the TopBar (and its ClaimModal
- * portal) is consistent across all four sub-pages without each page
- * having to plumb its own effects.
+ * The homepage applies its own overflow lock imperatively in
+ * <City3D>, so sub-pages don't need to opt-out of a global lock here
+ * — the document already scrolls on first paint.
  */
 export default function SubPageShell({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    document.body.classList.add('sub-page');
-    return () => {
-      document.body.classList.remove('sub-page');
-    };
-  }, []);
-
   return (
     <>
       <TopBar />

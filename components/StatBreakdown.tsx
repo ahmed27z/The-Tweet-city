@@ -25,7 +25,7 @@ export default function StatBreakdown({ building, stats }: Props) {
       <ul className="space-y-1.5 text-[11px] font-mono text-text-primary leading-snug">
         <li className="flex justify-between gap-3">
           <span className="text-text-muted">
-            Height → log₁₀(tweets) × 8
+            Height → max(2, log₁₀(tweets + 1) × 8)
           </span>
           <span>
             ≈{' '}
@@ -36,7 +36,7 @@ export default function StatBreakdown({ building, stats }: Props) {
         </li>
         <li className="flex justify-between gap-3">
           <span className="text-text-muted">
-            Width → log₁₀(followers) × 1.1
+            Width → max(1.2, log₁₀(followers + 1) × 1.1)
           </span>
           <span>
             ≈{' '}
@@ -47,7 +47,7 @@ export default function StatBreakdown({ building, stats }: Props) {
         </li>
         <li className="flex justify-between gap-3">
           <span className="text-text-muted">
-            Floors → ⌈following / 500⌉
+            Floors → max(1, ⌈following / 500⌉)
           </span>
           <span>
             ={' '}

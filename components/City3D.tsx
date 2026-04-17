@@ -3,7 +3,7 @@
 import { Canvas } from '@react-three/fiber';
 import { Grid, Stars } from '@react-three/drei';
 import { useRouter } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useCityStore } from '@/lib/store';
 import { THEMES } from '@/lib/themes';
@@ -57,6 +57,27 @@ export default function City3D() {
     } catch {
       setWebglOk(false);
     }
+  }, []);
+
+  // Scroll-lock the document while the city scene is mounted. Previously
+  // `overflow:hidden` was global in globals.css and sub-pages opted out
+  // via a client `useEffect` — which meant sub-pages were briefly
+  // unscrollable on slow networks before React mounted. We invert that:
+  // the default is scrollable, and only the homepage locks. Using
+  // `useLayoutEffect` so the lock is applied before the browser paints,
+  // preventing a 1-frame flash where the user could scroll the city
+  // canvas off-screen.
+  useLayoutEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
+    };
   }, []);
 
   if (webglOk === false) return <WebGLFallback />;

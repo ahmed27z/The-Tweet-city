@@ -2,7 +2,7 @@
 
 import { clsx } from 'clsx';
 import { useEffect, useRef, useState } from 'react';
-import { useKudosCount, useSocialStore } from '@/lib/social';
+import { useCanGiveKudos, useKudosCount, useSocialStore } from '@/lib/social';
 import FormattedNumber from './FormattedNumber';
 
 interface KudosButtonProps {
@@ -16,6 +16,8 @@ interface KudosButtonProps {
  * calls `giveKudos(target)`:
  *
  *   - Disabled if the viewer hasn't claimed yet (tooltip tells them to).
+ *   - Disabled with a "come back tomorrow" tooltip when the viewer's
+ *     balance is 0 AND no daily drop is owed today.
  *   - Rejects a self-clap with a small shake animation.
  *   - Briefly scales the button via CSS on successful click.
  */
@@ -23,6 +25,7 @@ export default function KudosButton({ target, compact }: KudosButtonProps) {
   const count = useKudosCount(target);
   const claimed = useSocialStore((s) => s.claimed);
   const giveKudos = useSocialStore((s) => s.giveKudos);
+  const gate = useCanGiveKudos(target);
 
   const [pulse, setPulse] = useState(0);
   const [shake, setShake] = useState(0);
@@ -32,12 +35,15 @@ export default function KudosButton({ target, compact }: KudosButtonProps) {
     if (pulseTimer.current) window.clearTimeout(pulseTimer.current);
   }, []);
 
-  const isSelf = claimed?.username === target;
-  const unclaimed = !claimed;
-  const disabled = unclaimed;
+  const isSelf = gate.reason === 'self' || claimed?.username === target;
+  const unclaimed = gate.reason === 'unclaimed';
+  const empty = gate.reason === 'empty';
+  // We still let the user CLICK a self-clap (to trigger the shake),
+  // so the `disabled` attribute only applies to the hard-blocked states.
+  const disabled = unclaimed || empty;
 
   const onClick = () => {
-    if (unclaimed) return;
+    if (unclaimed || empty) return;
     if (isSelf) {
       setShake((s) => s + 1);
       return;
@@ -48,19 +54,22 @@ export default function KudosButton({ target, compact }: KudosButtonProps) {
     }
   };
 
+  const title = unclaimed
+    ? 'Claim your building to give kudos'
+    : empty
+    ? 'Out of kudos — come back tomorrow'
+    : isSelf
+    ? 'Nice try — you can\'t clap your own building'
+    : `Give @${target} a kudos`;
+
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-label={`Give kudos to @${target}. Current count ${count}.`}
-      title={
-        unclaimed
-          ? 'Claim your building to give kudos'
-          : isSelf
-          ? 'Nice try — you can\'t clap your own building'
-          : `Give @${target} a kudos`
-      }
+      aria-disabled={disabled}
+      title={title}
       className={clsx(
         'select-none uppercase tracking-widest border-[2px]',
         'shadow-[2px_2px_0_0_#000] transition-all duration-150',

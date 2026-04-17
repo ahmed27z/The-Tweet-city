@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Modal from './Modal';
 import PixelButton from './PixelButton';
-import BuildingThumb from './BuildingThumb';
 import FormattedNumber from './FormattedNumber';
 import { formatJoinDate } from '@/lib/format';
 import type { BuildingProps, Theme, TwitterStats } from '@/lib/types';
@@ -23,6 +22,15 @@ interface ShareCardProps {
  *
  * We use `html2canvas` dynamically so the bundle only pulls it in
  * when the user actually opens this modal.
+ *
+ * Building visual
+ * ---------------
+ * The card embeds a static **SVG silhouette** of the building rather
+ * than a live WebGL canvas. `html2canvas` can't sample WebGL backing
+ * buffers, and the `preserveDrawingBuffer + gl.toDataURL` workaround
+ * is flaky across drivers. The SVG path — a colored rectangle with
+ * pixel windows and an optional gold crown — matches the pixel art
+ * aesthetic and survives any 2D rasterizer.
  */
 export default function ShareCard({
   open,
@@ -34,22 +42,36 @@ export default function ShareCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const [working, setWorking] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Reset copied state when the modal reopens
+  // Compute the share URL from the runtime origin so the modal reflects
+  // where it's actually deployed. SSR-safe via the window guard — the
+  // modal is client-only but cheap to harden against a hypothetical
+  // static-generation pass.
+  const [origin, setOrigin] = useState<string>('');
   useEffect(() => {
-    if (open) setCopied(false);
-  }, [open]);
+    if (typeof window !== 'undefined') {
+      setOrigin(window.location.origin);
+    }
+  }, []);
+  const shareUrl = origin
+    ? `${origin}/u/${stats.username}`
+    : `/u/${stats.username}`;
 
-  const shareUrl = `https://tweetcity.example/u/${stats.username}`;
+  // Reset copied/error state when the modal reopens
+  useEffect(() => {
+    if (open) {
+      setCopied(false);
+      setError(null);
+    }
+  }, [open]);
 
   const download = async () => {
     if (!cardRef.current) return;
     setWorking(true);
+    setError(null);
     try {
       const { default: html2canvas } = await import('html2canvas');
-      // html2canvas doesn't rasterize WebGL canvases — we render the
-      // 3D thumb off-stage, then html2canvas captures everything else
-      // and we composite the canvas contents on top manually.
       const canvas = await html2canvas(cardRef.current, {
         backgroundColor: theme.background,
         useCORS: true,
@@ -57,33 +79,12 @@ export default function ShareCard({
         scale: 1,
       });
 
-      const webglCanvas = cardRef.current.querySelector('canvas');
-      if (webglCanvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // Compute placement matching where the thumb sits in the card
-          const card = cardRef.current.getBoundingClientRect();
-          const thumb = (webglCanvas as HTMLCanvasElement).getBoundingClientRect();
-          const x = thumb.left - card.left;
-          const y = thumb.top - card.top;
-          try {
-            ctx.drawImage(
-              webglCanvas as HTMLCanvasElement,
-              x,
-              y,
-              thumb.width,
-              thumb.height,
-            );
-          } catch {
-            // ignore — some browsers taint-protect WebGL canvases
-          }
-        }
-      }
-
       const link = document.createElement('a');
       link.download = `${stats.username}-tweetcity.png`;
       link.href = canvas.toDataURL('image/png');
       link.click();
+    } catch {
+      setError('PNG export failed — try again');
     } finally {
       setWorking(false);
     }
@@ -157,14 +158,17 @@ export default function ShareCard({
                 {stats.displayName}
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
-                {/* Mini 3D canvas — html2canvas can't rasterize WebGL
-                    directly, so download() composites it on top after. */}
-                <BuildingThumb
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  marginTop: 10,
+                }}
+              >
+                <BuildingSvg
                   building={building}
                   theme={theme}
                   size={480}
-                  eager
                 />
               </div>
 
@@ -235,6 +239,15 @@ export default function ShareCard({
           </div>
         </div>
 
+        {error && (
+          <div
+            role="alert"
+            className="text-[11px] uppercase tracking-widest text-accent-amber"
+          >
+            {error}
+          </div>
+        )}
+
         <div className="flex gap-2">
           <PixelButton
             variant="glow"
@@ -280,5 +293,116 @@ function CardStat({
         <FormattedNumber value={value} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Static SVG silhouette of the building. Deterministic from the same
+ * BuildingProps the live 3D scene consumes, so the share card's
+ * visual reads as "the same building" even though it's 2D.
+ *
+ * The card's html2canvas rasterizer can sample SVG without any of the
+ * WebGL context gymnastics the live canvas would need.
+ */
+function BuildingSvg({
+  building,
+  theme,
+  size,
+}: {
+  building: BuildingProps;
+  theme: Theme;
+  size: number;
+}) {
+  // Derive silhouette proportions from the same `height` / `width`
+  // metrics the 3D generator produces. Tall narrow towers stay tall
+  // and narrow in SVG.
+  const aspect = Math.max(0.35, Math.min(1.6, building.width / Math.max(1, building.height)));
+  const maxH = size * 0.8;
+  const maxW = size * 0.7;
+  const h = Math.min(maxH, size * 0.25 + building.height * 10);
+  const w = Math.min(maxW, h * aspect);
+  const cx = size / 2;
+  const baseY = size * 0.9; // ground line inside the svg viewbox
+  const x = cx - w / 2;
+  const y = baseY - h;
+
+  // Windows: a grid of tiny lit squares, density tied to `floors`.
+  const floors = Math.max(1, Math.min(20, building.floors));
+  const cols = Math.max(2, Math.min(8, Math.round(w / 18)));
+  const cellW = w / (cols + 1);
+  const cellH = h / (floors + 1);
+  const windowSize = Math.max(3, Math.min(cellW, cellH) * 0.45);
+  const windows: Array<{ wx: number; wy: number }> = [];
+  for (let f = 1; f <= floors; f += 1) {
+    for (let c = 1; c <= cols; c += 1) {
+      windows.push({
+        wx: x + c * cellW - windowSize / 2,
+        wy: y + f * cellH - windowSize / 2,
+      });
+    }
+  }
+
+  // Window glow alpha comes from the same 0..1 `windowGlow` metric.
+  const glowAlpha = 0.4 + Math.min(1, building.windowGlow) * 0.6;
+
+  // Crown: a yellow triangle capping the roof when verified.
+  const crownHeight = building.hasGoldCrown ? Math.min(w * 0.6, size * 0.12) : 0;
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      xmlns="http://www.w3.org/2000/svg"
+      aria-label={`Pixel silhouette of @${building.username}'s building`}
+      style={{ display: 'block' }}
+    >
+      {/* Ground line */}
+      <line
+        x1={size * 0.05}
+        x2={size * 0.95}
+        y1={baseY + 2}
+        y2={baseY + 2}
+        stroke={theme.gridLine}
+        strokeWidth={2}
+      />
+
+      {/* Building body */}
+      <rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        fill={building.color}
+        stroke={theme.buildingAccent}
+        strokeWidth={2}
+        shapeRendering="crispEdges"
+      />
+
+      {/* Crown triangle (verified-only) */}
+      {building.hasGoldCrown && (
+        <polygon
+          points={`${x + w / 2},${y - crownHeight} ${x + w * 0.1},${y} ${x + w * 0.9},${y}`}
+          fill={theme.crown}
+          stroke={theme.crown}
+          strokeWidth={2}
+          shapeRendering="crispEdges"
+        />
+      )}
+
+      {/* Window grid */}
+      {windows.map((win, i) => (
+        <rect
+          key={i}
+          x={win.wx}
+          y={win.wy}
+          width={windowSize}
+          height={windowSize}
+          fill={theme.windowGlow}
+          opacity={glowAlpha}
+          shapeRendering="crispEdges"
+        />
+      ))}
+    </svg>
   );
 }

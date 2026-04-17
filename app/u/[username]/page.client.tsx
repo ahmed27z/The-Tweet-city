@@ -13,8 +13,9 @@ import { fetchUser } from '@/lib/twitterApi';
 import { generateBuilding } from '@/lib/buildingGenerator';
 import {
   referralCodeFor,
-  useSocialStore,
+  useCanGiveKudos,
   useKudosCount,
+  useSocialStore,
 } from '@/lib/social';
 import type { TwitterStats } from '@/lib/types';
 
@@ -25,8 +26,19 @@ interface Props {
 /**
  * Profile page body. Kept in a separate file (page.client.tsx) so
  * metadata can live in the server page.tsx entry.
+ *
+ * The incoming `username` param is normalized (lowercased + trimmed)
+ * once here so every downstream consumer — `giveKudos`, `kudosGiven`,
+ * `claimed.username === username` comparisons — uses the same key.
+ * Without this, `/u/ElonMusk` and `/u/elonmusk` would read different
+ * buckets out of the store.
  */
-export default function UserPageClient({ username }: Props) {
+export default function UserPageClient({ username: rawUsername }: Props) {
+  const username = useMemo(
+    () => rawUsername.replace(/^@/, '').toLowerCase().trim(),
+    [rawUsername],
+  );
+
   const [stats, setStats] = useState<TwitterStats | null | undefined>(undefined);
   const themeId = useCityStore((s) => s.theme);
   const theme = THEMES[themeId];
@@ -34,6 +46,7 @@ export default function UserPageClient({ username }: Props) {
   const addReferral = useSocialStore((s) => s.addReferral);
   const giveKudos = useSocialStore((s) => s.giveKudos);
   const kudosCount = useKudosCount(username);
+  const clapGate = useCanGiveKudos(username);
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -122,8 +135,7 @@ export default function UserPageClient({ username }: Props) {
               }
               onClap={onClap}
               kudosCount={kudosCount}
-              claimed={!!claimed}
-              isSelf={claimed?.username === username}
+              clapGate={clapGate}
             />
           </div>
         </div>
@@ -144,16 +156,14 @@ function HeroSquare({
   cosmetics,
   onClap,
   kudosCount,
-  claimed,
-  isSelf,
+  clapGate,
 }: {
   building: ReturnType<typeof generateBuilding>;
   theme: (typeof THEMES)[keyof typeof THEMES];
   cosmetics: Hero3DEquippedCosmetics | undefined;
   onClap: () => void;
   kudosCount: number;
-  claimed: boolean;
-  isSelf: boolean;
+  clapGate: ReturnType<typeof useCanGiveKudos>;
 }) {
   // Fixed 560 visual size on desktop — Hero3D uses a square canvas so
   // we match it. Tailwind's aspect-square keeps the wrapper proportional
@@ -169,12 +179,15 @@ function HeroSquare({
     return () => window.removeEventListener('resize', resize);
   }, []);
 
-  const disabled = !claimed || isSelf;
-  const reason = !claimed
-    ? 'Claim your building to give kudos'
-    : isSelf
-    ? 'You can\'t clap your own building'
-    : undefined;
+  const disabled = !clapGate.allowed;
+  const reason =
+    clapGate.reason === 'unclaimed'
+      ? 'Claim your building to give kudos'
+      : clapGate.reason === 'self'
+      ? "You can't clap your own building"
+      : clapGate.reason === 'empty'
+      ? 'Out of kudos — come back tomorrow'
+      : undefined;
 
   return (
     <Hero3D
@@ -189,8 +202,3 @@ function HeroSquare({
     />
   );
 }
-
-/** Re-implement `referralCodeFor` locally to avoid a needless import
- * churn cycle — the social module uses the same hash. We keep a thin
- * guard here so a manually-typed ?ref=ABC won't incorrectly credit. */
-// (exported from lib/social.ts; no local shadow needed)

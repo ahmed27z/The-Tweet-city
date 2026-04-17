@@ -85,7 +85,7 @@ export default function TopBar() {
       {/* Mobile burger */}
       <button
         type="button"
-        aria-label="Open menu"
+        aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
         aria-expanded={menuOpen}
         onClick={() => setMenuOpen((m) => !m)}
         className="md:hidden text-xs text-text-primary px-2 py-1 border-[2px] border-text-muted/40"
@@ -108,6 +108,7 @@ export default function TopBar() {
               onClick={() => setUserOpen((o) => !o)}
               aria-haspopup="menu"
               aria-expanded={userOpen}
+              aria-label={`Account menu — @${claimed.username}`}
               className={clsx(
                 'flex items-center gap-2 px-2 py-1 border-[2px] border-accent-cyan',
                 'bg-bg-secondary text-accent-cyan text-[10px] uppercase tracking-widest',

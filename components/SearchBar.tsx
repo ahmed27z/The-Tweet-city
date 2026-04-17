@@ -27,10 +27,12 @@ function formatCount(n: number): string {
  *
  * Accessibility
  * -------------
- * Exposes the ARIA combobox pattern: the wrapper is role="combobox",
- * the dropdown is role="listbox", and each row is role="option". The
- * highlighted row's id is mirrored onto `aria-activedescendant` so
- * screen-readers announce it even though focus stays on the input.
+ * Implements the ARIA 1.2 combobox pattern. The combobox role lives
+ * directly on the `<input>` (per spec — the old 1.1 pattern placed it
+ * on a wrapper, but 1.2 requires the input). The dropdown is
+ * role="listbox" with role="option" rows. The highlighted row's id is
+ * mirrored onto `aria-activedescendant` so screen-readers announce it
+ * even though focus stays on the input.
  */
 export default function SearchBar() {
   const router = useRouter();
@@ -115,11 +117,6 @@ export default function SearchBar() {
   return (
     <div
       ref={wrapRef}
-      role="combobox"
-      aria-haspopup="listbox"
-      aria-expanded={open}
-      aria-owns={listboxId}
-      aria-controls={listboxId}
       className="relative w-full max-w-md"
     >
       <input
@@ -130,6 +127,9 @@ export default function SearchBar() {
         onKeyDown={onKey}
         placeholder="search @handle…"
         aria-label="Search Twitter handles"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
         aria-autocomplete="list"
         aria-controls={listboxId}
         aria-activedescendant={activeId}

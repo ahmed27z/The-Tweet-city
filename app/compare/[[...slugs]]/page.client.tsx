@@ -21,7 +21,26 @@ interface Props {
   slugs: string[];
 }
 
-export default function ComparePageClient({ slugs }: Props) {
+/** localStorage key — bumped with the parser if the schema ever changes. */
+const MRU_KEY = 'tweetcity-compare-mru';
+
+/** Narrow a parsed MRU blob to the expected `string[]` shape. */
+function isValidMru(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((s) => typeof s === 'string');
+}
+
+export default function ComparePageClient({ slugs: rawSlugs }: Props) {
+  // Normalize every slug from the URL so the downstream compare/fetch
+  // path doesn't split `/compare/ElonMusk/naval` and `/compare/elonmusk/naval`
+  // across two caches.
+  const slugs = useMemo(
+    () =>
+      rawSlugs
+        .map((s) => s.replace(/^@/, '').toLowerCase().trim())
+        .filter(Boolean),
+    [rawSlugs],
+  );
+
   if (slugs.length >= 2) {
     return <CompareView a={slugs[0]} b={slugs[1]} />;
   }
@@ -41,28 +60,56 @@ function ComparePicker({ initial }: { initial?: string }) {
     return searchUsers(q.trim(), 6);
   }, [q]);
 
-  // Most-recent list from localStorage (best-effort)
+  // Most-recent list from localStorage — best-effort, but a malformed
+  // entry (null, object, array-of-numbers) must not crash the picker.
   const [mru, setMru] = useState<string[]>([]);
   useEffect(() => {
+    const raw = (() => {
+      try {
+        return localStorage.getItem(MRU_KEY);
+      } catch {
+        return null;
+      }
+    })();
+    if (raw === null) return;
+    let parsed: unknown;
+    let parseOk = true;
     try {
-      const raw = localStorage.getItem('tweetcity-compare-mru');
-      if (raw) setMru(JSON.parse(raw));
+      parsed = JSON.parse(raw);
     } catch {
-      /* noop */
+      parseOk = false;
+    }
+    if (parseOk && isValidMru(parsed)) {
+      setMru(parsed);
+    } else {
+      // Parse failed outright, or parsed to something that isn't
+      // `string[]`. Either way, scrub the key so future reads start
+      // clean instead of erroring over and over.
+      try {
+        localStorage.removeItem(MRU_KEY);
+      } catch {
+        /* noop */
+      }
     }
   }, []);
 
+  const normA = a.replace(/^@/, '').toLowerCase().trim();
+  const normB = b.replace(/^@/, '').toLowerCase().trim();
+  const canCompare = !!normA && !!normB && normA !== normB;
+
   const submit = () => {
-    const aa = a.replace(/^@/, '').toLowerCase().trim();
-    const bb = b.replace(/^@/, '').toLowerCase().trim();
-    if (!aa || !bb || aa === bb) return;
+    if (!canCompare) return;
     try {
-      const next = [aa, bb, ...mru.filter((x) => x !== aa && x !== bb)].slice(0, 6);
-      localStorage.setItem('tweetcity-compare-mru', JSON.stringify(next));
+      const next = [
+        normA,
+        normB,
+        ...mru.filter((x) => x !== normA && x !== normB),
+      ].slice(0, 6);
+      localStorage.setItem(MRU_KEY, JSON.stringify(next));
     } catch {
       /* noop */
     }
-    router.push(`/compare/${aa}/${bb}`);
+    router.push(`/compare/${normA}/${normB}`);
   };
 
   return (
@@ -151,14 +198,24 @@ function ComparePicker({ initial }: { initial?: string }) {
           </div>
         )}
 
-        <PixelButton
-          variant="glow"
-          onClick={submit}
-          disabled={!a || !b || a === b}
-          className="w-full"
-        >
-          Compare
-        </PixelButton>
+        <div className="space-y-1">
+          <PixelButton
+            variant="glow"
+            onClick={submit}
+            disabled={!canCompare}
+            className="w-full"
+          >
+            Compare
+          </PixelButton>
+          {normA && normB && normA === normB && (
+            <div
+              className="text-[10px] uppercase tracking-widest text-accent-amber"
+              role="status"
+            >
+              pick two different handles
+            </div>
+          )}
+        </div>
       </div>
     </SubPageShell>
   );
@@ -451,14 +508,34 @@ function WhoWins({ sa, sb }: { sa: TwitterStats; sb: TwitterStats }) {
   else if (bPoints > aPoints) verdict = `@${sb.username} wins`;
   else verdict = 'Draw';
 
+  // Tagline building: only include a clause when the underlying metric
+  // actually has a winner. Exact ties (identical joinDate / identical
+  // tweetsLast7Days) would otherwise produce a false claim, e.g.
+  // `@a is older but @b tweets more` when neither is strictly older.
   const ageA = accountAgeYears(sa.joinDate);
   const ageB = accountAgeYears(sb.joinDate);
-  const older = ageA > ageB ? sa : sb;
-  const tweeter = sa.tweetsLast7Days > sb.tweetsLast7Days ? sa : sb;
-  const tagline =
-    older.username === tweeter.username
-      ? `@${older.username} is older and tweets more.`
-      : `@${older.username} is older but @${tweeter.username} tweets more.`;
+  const ageTied = ageA === ageB;
+  const tweetTied = sa.tweetsLast7Days === sb.tweetsLast7Days;
+  const older = ageTied ? null : ageA > ageB ? sa : sb;
+  const tweeter = tweetTied
+    ? null
+    : sa.tweetsLast7Days > sb.tweetsLast7Days
+    ? sa
+    : sb;
+
+  let tagline: string;
+  if (older && tweeter) {
+    tagline =
+      older.username === tweeter.username
+        ? `@${older.username} is older and tweets more.`
+        : `@${older.username} is older but @${tweeter.username} tweets more.`;
+  } else if (older) {
+    tagline = `@${older.username} is older.`;
+  } else if (tweeter) {
+    tagline = `@${tweeter.username} tweets more.`;
+  } else {
+    tagline = "Even match · it's a draw on the headline numbers.";
+  }
 
   return (
     <div className="border-[2px] border-accent-cyan bg-bg-secondary/60 p-4">

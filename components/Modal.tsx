@@ -34,8 +34,9 @@ interface ModalProps {
  *  - Backdrop click closes
  *  - Focus trapped inside the dialog while open; restored to the
  *    previously-focused element on close
- *  - `overflow-hidden` applied to <body> while any modal is open, so
- *    the page underneath doesn't scroll
+ *  - `overflow-hidden` applied to both <html> and <body> while any
+ *    modal is open, so the page underneath doesn't scroll regardless
+ *    of which element is the real scroll container.
  */
 export default function Modal({
   open,
@@ -65,13 +66,21 @@ export default function Modal({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  // Lock body scroll while open
+  // Lock document scroll while open. We lock both <html> and <body>
+  // because sub-pages (which now use the default document scroller —
+  // see globals.css) bubble wheel/scroll events up to <html>, and
+  // locking only <body> would leave those scrollable behind the modal.
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = prev;
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
     };
   }, [open]);
 
