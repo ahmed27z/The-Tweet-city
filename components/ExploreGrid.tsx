@@ -146,9 +146,9 @@ function ExploreCard({
       onFocus={() => setHover(true)}
       onBlur={() => setHover(false)}
       className={clsx(
-        'group border-[2px] border-text-muted/30 bg-bg-secondary/60 p-3 flex gap-3 items-start',
+        'group border-[2px] border-text-muted/30 bg-black/60 p-3 flex gap-3 items-start',
         'transition-colors duration-150',
-        'hover:border-accent-cyan hover:bg-bg-secondary/90 focus-visible:border-accent-cyan',
+        'hover:border-accent-cyan hover:bg-black/80 focus-visible:border-accent-cyan',
         'focus:outline-none',
       )}
     >

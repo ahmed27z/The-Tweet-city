@@ -51,8 +51,15 @@ export function generateBuilding(
   theme: Theme,
 ): BuildingProps {
   const avgLikesPerTweet = stats.totalLikes / Math.max(1, stats.tweetCount);
-  const height = Math.max(2, Math.log10(stats.tweetCount + 1) * 8); // 2..~40
-  const width = Math.max(1.2, Math.log10(stats.followers + 1) * 1.1); // 1.2..~8.5
+  // Height: a bit taller max so even modest towers read against the horizon
+  // from the bird's-eye camera.
+  const height = Math.max(1.5, Math.log10(stats.tweetCount + 1) * 10); // 1.5..~50
+  // Width: clamp both ends so megaphones don't spill into neighbouring
+  // grid cells (spacing is 3.2) and no-op accounts are still visible.
+  const width = Math.max(
+    0.9,
+    Math.min(3.0, Math.log10(stats.followers + 1) * 0.55),
+  );
   const floors = Math.max(1, Math.ceil(stats.following / 500));
   const windowGlow = Math.min(1, avgLikesPerTweet / 1000);
   const isAnimated = stats.tweetsLast7Days > 5;
@@ -64,16 +71,23 @@ export function generateBuilding(
   const colorful = stats.mediaTweets / Math.max(1, stats.tweetCount) > 0.3;
 
   // Pick the building color.
-  // - colorful → vibrant hue derived from the username hash mapped to HSL
-  // - otherwise → mix building base ↔ accent at 10..40% based on followers
+  // Both branches stay intentionally dark — the city's visual signature
+  // is thousands of near-black bodies *speckled* with cyan window dots,
+  // not fields of pastel blocks. Colour-of-body is a whisper; colour-of-
+  // windows is the shout.
   let color: string;
   if (colorful) {
+    // Media-heavy users get a faint hue bias. Lightness stays very low
+    // so they still read as dark buildings, not candy.
     const h = hashString(stats.username) % 360;
-    color = hslToHex(h, 75, 55);
+    color = hslToHex(h, 32, 14);
   } else {
+    // Everyone else: mix between near-black and the theme buildingBase.
+    // Follower-driven weight nudges the megaphones a hair brighter so
+    // the downtown cluster still has a subtle silhouette pop.
     const followerWeight = Math.min(1, Math.log10(stats.followers + 1) / 8);
-    const t = 0.1 + followerWeight * 0.3; // 0.1..0.4
-    color = mixHex(theme.buildingBase, theme.buildingAccent, t);
+    const t = 0.05 + followerWeight * 0.15; // 0.05..0.20
+    color = mixHex('#070a10', theme.buildingBase, t);
   }
 
   return {

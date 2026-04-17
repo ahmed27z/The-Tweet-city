@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import type { BuildingProps, Theme } from '@/lib/types';
 import { useCityStore } from '@/lib/store';
 import { CITY_BOUNDS } from '@/lib/cityLayout';
+import { hashString } from '@/lib/buildingGenerator';
+import { seededRandom } from '@/lib/mockData';
 
 interface BuildingInstancedProps {
   buildings: BuildingProps[];
@@ -16,28 +18,38 @@ interface BuildingInstancedProps {
 
 /**
  * High-throughput renderer for the entire city. Splits the buildings
- * into three LOD buckets (near / mid / far) and renders each bucket as
- * a single THREE.InstancedMesh. Per-instance events come back through
- * R3F's `event.instanceId`, which we map back to the bucket's owner
- * indices.
+ * into three LOD buckets (near / mid / far) for bodies, plus two
+ * InstancedMeshes for the signature window-dot glitter (split into
+ * a static bucket and a pulsing bucket so only animated users pay the
+ * cost of per-frame color updates).
  *
- * Why InstancedMesh?
- * ------------------
- * 50 buildings would still be fine as separate meshes, but the design
- * doc plans for hundreds-of-thousands later. Building this with the
- * right primitive now means the next task can swap mock data for the
- * real API and the city scales without architectural changes.
+ * Why this shape?
+ * ---------------
+ * 2000 buildings and ~100k individual windows is beyond what
+ * one-mesh-per-building can handle. Every primitive here is an
+ * `InstancedMesh` so the scene draws in < 10 draw calls regardless of
+ * how full the city gets.
  *
- * LOD strategy
- * ------------
- *   < 80 units  → near : detailed body + window-glow planes + crown
- *   < 200 units → mid  : body only with flat emissive tint
- *   else       → far  : tiny 1-unit-wide flat-shaded body
- *   > CITY_BOUNDS+50  → hidden entirely (set scale to 0)
+ * LOD strategy (body meshes)
+ * --------------------------
+ *   < 80 units  → near : interactive, flat-emissive body with a gentle
+ *                         accent tint baked into the material
+ *   < 200 units → mid  : non-interactive body with the same material
+ *                         family, slightly pushed toward the accent
+ *   else        → far  : flat body, unlit windows
+ *   dist > CITY_BOUNDS+50 → hidden (scale 0)
  *
  * Buckets are recomputed every 10 frames so we don't pay distance
- * checks every tick. Window-glow animation runs at ≤30 Hz across only
- * the near bucket.
+ * checks every tick. **Windows are placed once at mount** — because
+ * the buildings don't move, there's no reason to rewrite the
+ * per-instance matrices every frame.
+ *
+ * Pulsing
+ * -------
+ * Animated users (high tweetsLast7Days) get their windows in the
+ * `winPulseRef` mesh, whose material color is modulated once per frame
+ * by a shared sine. Non-animated windows go in `winStaticRef` and
+ * stay put — zero per-frame cost.
  */
 export default function BuildingInstanced({
   buildings,
@@ -46,20 +58,21 @@ export default function BuildingInstanced({
 }: BuildingInstancedProps) {
   const setHovered = useCityStore((s) => s.setHovered);
 
-  // Refs — one InstancedMesh per LOD body + crown
+  // Refs — one InstancedMesh per LOD body + crowns + two window banks
   const nearRef = useRef<THREE.InstancedMesh>(null);
   const midRef = useRef<THREE.InstancedMesh>(null);
   const farRef = useRef<THREE.InstancedMesh>(null);
-  const winRef = useRef<THREE.InstancedMesh>(null); // window-glow planes (near)
-  const crownRef = useRef<THREE.InstancedMesh>(null); // gold crowns (near)
+  const winStaticRef = useRef<THREE.InstancedMesh>(null);
+  const winPulseRef = useRef<THREE.InstancedMesh>(null);
+  const crownRef = useRef<THREE.InstancedMesh>(null);
 
-  // Reusable scratch object — allocated once
+  // Reusable scratch — allocated once
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const tmpColor = useMemo(() => new THREE.Color(), []);
 
   /**
-   * Per-instance index → owning building index (so we can resolve clicks
-   * back to a username). Updated in step with the LOD assignment below.
+   * Per-instance index → owning building index (so clicks resolve to
+   * a username). Updated in step with LOD assignment below.
    */
   const indexMap = useRef<{
     near: number[];
@@ -73,32 +86,27 @@ export default function BuildingInstanced({
   const glowColor = useMemo(() => new THREE.Color(theme.windowGlow), [theme.windowGlow]);
   const crownColor = useMemo(() => new THREE.Color(theme.crown), [theme.crown]);
 
-  // Materials — one per bucket. We reuse them across rebucketings.
+  // Materials — one per bucket. Bodies use MeshStandardMaterial so the
+  // directional/ambient lighting picks up a subtle silhouette gradient;
+  // windows use MeshBasicMaterial with `toneMapped: false` so they read
+  // as bright glittery pixels against the dark bodies.
   const nearMat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        // Per-instance color overrides this base value, but we still set it
-        // as a sane default so a freshly-allocated instance is visible.
         color: '#ffffff',
-        roughness: 0.55,
-        metalness: 0.15,
-        // Subtle emissive tint based on the theme's accent so the city
-        // glows even before the per-window planes light up.
-        emissive: accentColor,
-        emissiveIntensity: 0.05,
+        roughness: 0.9,
+        metalness: 0.05,
       }),
-    [accentColor],
+    [],
   );
   const midMat = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
         color: '#ffffff',
-        roughness: 0.8,
-        metalness: 0.05,
-        emissive: accentColor,
-        emissiveIntensity: 0.08,
+        roughness: 0.95,
+        metalness: 0.02,
       }),
-    [accentColor],
+    [],
   );
   const farMat = useMemo(
     () =>
@@ -107,14 +115,19 @@ export default function BuildingInstanced({
       }),
     [],
   );
-  const windowMat = useMemo(
+  const windowStaticMat = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: glowColor,
-        transparent: true,
-        opacity: 0.85,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        color: glowColor.clone(),
+        toneMapped: false,
+      }),
+    [glowColor],
+  );
+  const windowPulseMat = useMemo(
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: glowColor.clone(),
+        toneMapped: false,
       }),
     [glowColor],
   );
@@ -130,13 +143,124 @@ export default function BuildingInstanced({
     [crownColor],
   );
 
+  // ---- Window matrix pre-computation (mount-time, not per-frame) --------
+  //
+  // Every window across the entire city is placed once. The geometry
+  // doesn't change as the camera moves, so there's no reason to rewrite
+  // instance matrices each tick. We split into two banks so animated
+  // users can pulse without touching the static majority.
+  const windowBanks = useMemo(() => {
+    const staticMatrices: THREE.Matrix4[] = [];
+    const pulseMatrices: THREE.Matrix4[] = [];
+    const d = new THREE.Object3D();
+
+    for (let bi = 0; bi < buildings.length; bi += 1) {
+      const b = buildings[bi];
+
+      // How many row bands fit on the building?
+      const maxRowsByHeight = Math.max(1, Math.floor(b.height / 1.6));
+      const rowsDesired = Math.min(b.floors, maxRowsByHeight);
+      const FACADES = 4;
+      const COLS = 3;
+      const maxRowsByBudget = Math.floor(120 / (FACADES * COLS));
+      const rows = Math.min(rowsDesired, maxRowsByBudget);
+      if (rows <= 0) continue;
+
+      const litRatio = 0.3 + 0.5 * b.windowGlow;
+      const rng = seededRandom(hashString(b.username) ^ 0x7afe_10c5);
+
+      const yBase = b.position[1];
+      const yTop = yBase + b.height;
+      const rowHeight = (yTop - yBase) / rows;
+
+      for (let row = 0; row < rows; row += 1) {
+        const y = yBase + rowHeight * (row + 0.5);
+
+        for (let f = 0; f < FACADES; f += 1) {
+          // Per-facade axis/sign:
+          //   0 → +Z face,   1 → -Z face,   2 → +X face,   3 → -X face
+          for (let c = 0; c < COLS; c += 1) {
+            const colFrac = (c + 0.5) / COLS;
+            // Jitter is small — just enough to break the perfect grid.
+            const jCol = (rng() - 0.5) * 0.25;
+            const jRow = (rng() - 0.5) * 0.35;
+            // Each slot rolls its own lit probability. Unlit slots are
+            // simply not emitted — saves instance count.
+            const lit = rng() < litRatio;
+            if (!lit) continue;
+
+            const colOffset = (colFrac - 0.5 + jCol * 0.15) * (b.width * 0.8);
+            const wy = y + jRow * rowHeight * 0.2;
+            const surfaceOffset = b.width / 2 + 0.035;
+
+            let wx = b.position[0];
+            let wz = b.position[2];
+            if (f === 0) {
+              wx += colOffset;
+              wz += surfaceOffset;
+            } else if (f === 1) {
+              wx -= colOffset;
+              wz -= surfaceOffset;
+            } else if (f === 2) {
+              wx += surfaceOffset;
+              wz += colOffset;
+            } else {
+              wx -= surfaceOffset;
+              wz -= colOffset;
+            }
+
+            d.position.set(wx, wy, wz);
+            d.rotation.set(0, 0, 0);
+            d.scale.set(1, 1, 1);
+            d.updateMatrix();
+            (b.isAnimated ? pulseMatrices : staticMatrices).push(
+              d.matrix.clone(),
+            );
+          }
+        }
+      }
+    }
+
+    return { staticMatrices, pulseMatrices };
+  }, [buildings]);
+
+  // Write the window matrices into the InstancedMeshes once the refs
+  // are bound + also re-run when the bank content changes (theme swap
+  // doesn't regenerate windows; building changes do).
+  useEffect(() => {
+    const sm = winStaticRef.current;
+    if (sm) {
+      const n = windowBanks.staticMatrices.length;
+      for (let i = 0; i < n; i += 1) {
+        sm.setMatrixAt(i, windowBanks.staticMatrices[i]);
+      }
+      sm.count = n;
+      sm.instanceMatrix.needsUpdate = true;
+      sm.frustumCulled = true;
+      // Bounding sphere captures the whole city so three doesn't
+      // prematurely cull instances when the camera pans.
+      sm.computeBoundingSphere();
+    }
+
+    const pm = winPulseRef.current;
+    if (pm) {
+      const n = windowBanks.pulseMatrices.length;
+      for (let i = 0; i < n; i += 1) {
+        pm.setMatrixAt(i, windowBanks.pulseMatrices[i]);
+      }
+      pm.count = n;
+      pm.instanceMatrix.needsUpdate = true;
+      pm.frustumCulled = true;
+      pm.computeBoundingSphere();
+    }
+  }, [windowBanks]);
+
   /**
    * Assign every building to a bucket based on distance to the camera,
    * then write a transformation matrix and per-instance color into each
-   * InstancedMesh.
+   * body InstancedMesh. Runs every 10 frames.
    *
-   * Called every frame inside `useFrame`, but throttled by `frameCount`
-   * to once every 10 frames (≈6 Hz at 60 fps).
+   * Windows are pre-placed (see `windowBanks`) and don't need this pass.
    */
   const reassignBuckets = (camPos: THREE.Vector3) => {
     const near: number[] = [];
@@ -144,21 +268,29 @@ export default function BuildingInstanced({
     const far: number[] = [];
     const HIDE = CITY_BOUNDS + 50;
 
+    // Bucket by ground-plane distance (XZ only) so a bird's-eye
+    // camera 110 units up still treats the whole visible cluster as
+    // "near" for interactive purposes. This matters for hover +
+    // click on the homepage: the user looks *down* at the city, and
+    // every building directly below is a click target even though
+    // euclidean distance puts them "far". True far-distance culling
+    // is still done via the full 3D distance below.
     for (let i = 0; i < buildings.length; i += 1) {
       const b = buildings[i];
       const dx = b.position[0] - camPos.x;
-      const dy = b.position[1] - camPos.y;
       const dz = b.position[2] - camPos.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > HIDE) continue; // off-stage, skip
-      if (dist < 80) near.push(i);
-      else if (dist < 200) mid.push(i);
+      const dy = b.position[1] - camPos.y;
+      const distGround = Math.sqrt(dx * dx + dz * dz);
+      const dist3 = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist3 > HIDE) continue;
+      if (distGround < 120) near.push(i);
+      else if (distGround < 220) mid.push(i);
       else far.push(i);
     }
 
     indexMap.current = { near, mid, far };
 
-    // ---- NEAR bucket -----------------------------------------------------
+    // ---- NEAR bucket (interactive) --------------------------------------
     const nm = nearRef.current;
     if (nm) {
       near.forEach((bi, slot) => {
@@ -168,10 +300,8 @@ export default function BuildingInstanced({
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
         nm.setMatrixAt(slot, dummy.matrix);
-        // Per-instance color (lets each building be its own colorful tint)
         nm.setColorAt(slot, tmpColor.set(b.color));
       });
-      // Hide unused slots from this bucket allocation
       for (let s = near.length; s < nm.count; s += 1) {
         dummy.position.set(0, -10000, 0);
         dummy.scale.set(0, 0, 0);
@@ -182,7 +312,7 @@ export default function BuildingInstanced({
       if (nm.instanceColor) nm.instanceColor.needsUpdate = true;
     }
 
-    // ---- MID bucket ------------------------------------------------------
+    // ---- MID bucket -----------------------------------------------------
     const mm = midRef.current;
     if (mm) {
       mid.forEach((bi, slot) => {
@@ -192,9 +322,8 @@ export default function BuildingInstanced({
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
         mm.setMatrixAt(slot, dummy.matrix);
-        // Mid LOD blends each color toward the theme accent so the city
-        // reads coherent at distance. (1 = pure accent, 0 = local color)
-        tmpColor.set(b.color).lerp(accentColor, 0.25);
+        // A subtle pull toward the accent keeps the mid field coherent.
+        tmpColor.set(b.color).lerp(accentColor, 0.15);
         mm.setColorAt(slot, tmpColor);
       });
       for (let s = mid.length; s < mm.count; s += 1) {
@@ -207,19 +336,20 @@ export default function BuildingInstanced({
       if (mm.instanceColor) mm.instanceColor.needsUpdate = true;
     }
 
-    // ---- FAR bucket ------------------------------------------------------
+    // ---- FAR bucket -----------------------------------------------------
     const fm = farRef.current;
     if (fm) {
       far.forEach((bi, slot) => {
         const b = buildings[bi];
-        // Far LOD: fixed thin block so silhouettes are still visible.
-        const w = Math.max(0.6, b.width * 0.4);
+        // Far LOD: keep full width so silhouettes still read against
+        // the horizon (the old trick of shrinking far buildings makes
+        // the rim of the city look sparse).
         dummy.position.set(b.position[0], b.height / 2, b.position[2]);
-        dummy.scale.set(w, b.height, w);
+        dummy.scale.set(b.width, b.height, b.width);
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
         fm.setMatrixAt(slot, dummy.matrix);
-        tmpColor.set(b.color).lerp(baseColor, 0.5);
+        tmpColor.set(b.color).lerp(baseColor, 0.3);
         fm.setColorAt(slot, tmpColor);
       });
       for (let s = far.length; s < fm.count; s += 1) {
@@ -232,40 +362,15 @@ export default function BuildingInstanced({
       if (fm.instanceColor) fm.instanceColor.needsUpdate = true;
     }
 
-    // ---- NEAR window-glow planes ----------------------------------------
-    // For each near building we render ONE plane sitting on the +Z facade.
-    // It's an additive flat plane — gives the city a candle-lit feel
-    // without the per-window cost. Cheap & convincing at street-level.
-    const wm = winRef.current;
-    if (wm) {
-      near.forEach((bi, slot) => {
-        const b = buildings[bi];
-        dummy.position.set(
-          b.position[0],
-          b.height / 2,
-          b.position[2] + b.width / 2 + 0.02,
-        );
-        dummy.scale.set(b.width * 0.85, b.height * 0.85, 1);
-        dummy.rotation.set(0, 0, 0);
-        dummy.updateMatrix();
-        wm.setMatrixAt(slot, dummy.matrix);
-      });
-      for (let s = near.length; s < wm.count; s += 1) {
-        dummy.position.set(0, -10000, 0);
-        dummy.scale.set(0, 0, 0);
-        dummy.updateMatrix();
-        wm.setMatrixAt(s, dummy.matrix);
-      }
-      wm.instanceMatrix.needsUpdate = true;
-    }
-
-    // ---- NEAR gold crowns -----------------------------------------------
+    // ---- Gold crowns (verified only) ------------------------------------
+    // Drawn for every verified building regardless of LOD — it's a
+    // status signal, we want it visible from any altitude.
     const cm = crownRef.current;
     if (cm) {
       let used = 0;
-      near.forEach((bi) => {
-        const b = buildings[bi];
-        if (!b.hasGoldCrown) return;
+      for (let i = 0; i < buildings.length; i += 1) {
+        const b = buildings[i];
+        if (!b.hasGoldCrown) continue;
         dummy.position.set(b.position[0], b.height + 0.6, b.position[2]);
         dummy.scale.set(
           Math.max(0.4, b.width * 0.45),
@@ -274,9 +379,11 @@ export default function BuildingInstanced({
         );
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
-        cm.setMatrixAt(used, dummy.matrix);
-        used += 1;
-      });
+        if (used < cm.count) {
+          cm.setMatrixAt(used, dummy.matrix);
+          used += 1;
+        }
+      }
       for (let s = used; s < cm.count; s += 1) {
         dummy.position.set(0, -10000, 0);
         dummy.scale.set(0, 0, 0);
@@ -288,54 +395,32 @@ export default function BuildingInstanced({
   };
 
   // ---- Frame loop --------------------------------------------------------
-  // We coalesce two pieces of work: bucket-reassignment (~6 Hz) and the
-  // window glow pulse (≤30 Hz, near bucket only).
   const frameCount = useRef(0);
-  const glowAccum = useRef(0);
 
-  useFrame((state, delta) => {
+  useFrame((state) => {
     frameCount.current += 1;
     if (frameCount.current % 10 === 0) {
       reassignBuckets(state.camera.position);
     }
 
-    glowAccum.current += delta;
-    if (glowAccum.current > 1 / 30) {
-      glowAccum.current = 0;
-      // Pulse the additive plane opacity so the windows look like they
-      // breathe. Animated buildings (high tweetsLast7Days) shimmer; static
-      // buildings hold steady.
-      const t = state.clock.getElapsedTime();
-      // The shared material covers all near windows; we just modulate
-      // opacity. Pulse magnitude uses the average windowGlow of the near
-      // bucket so a quiet area stays quiet.
-      let avg = 0;
-      const near = indexMap.current.near;
-      let animatedShare = 0;
-      for (let i = 0; i < near.length; i += 1) {
-        avg += buildings[near[i]].windowGlow;
-        animatedShare += buildings[near[i]].isAnimated ? 1 : 0;
-      }
-      avg = near.length ? avg / near.length : 0.4;
-      animatedShare = near.length ? animatedShare / near.length : 0.5;
-      const pulse = 0.85 + animatedShare * 0.15 * Math.sin(t * 3);
-      windowMat.opacity = Math.max(0.15, Math.min(1, 0.45 + 0.5 * avg) * pulse);
-    }
+    // Pulse the animated-windows material color. Non-animated windows
+    // don't get a useFrame write — the static bank is untouched.
+    const t = state.clock.getElapsedTime();
+    const pulse = 0.82 + 0.18 * (Math.sin(t * 1.6) * 0.5 + 0.5);
+    windowPulseMat.color.copy(glowColor).multiplyScalar(pulse);
+    // Keep the static material locked at full brightness so the sea of
+    // quiet windows doesn't dim with the pulse.
+    windowStaticMat.color.copy(glowColor);
   });
 
-  // Initial bucket population so the first frame already has matrices set.
+  // Initial bucket population + window writes so first frame already
+  // has the scene populated.
   useEffect(() => {
-    // Set a synthetic camera position somewhere "near" the center so the
-    // first frame shows a good mix of LODs. The real camera takes over
-    // immediately on the first useFrame tick.
-    reassignBuckets(new THREE.Vector3(0, 45, 60));
+    reassignBuckets(new THREE.Vector3(0, 110, 150));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildings, theme]);
 
-  // ---- Pointer events ----------------------------------------------------
-  // R3F decorates the event with `instanceId` for InstancedMesh. We only
-  // wire these on the NEAR bucket — hovering a far-away pixel is unhelpful
-  // and would just add noise.
+  // ---- Pointer events (near bucket only) --------------------------------
   const onMove = (e: ThreeEvent<PointerEvent>) => {
     const id = e.instanceId;
     if (id == null) return;
@@ -349,57 +434,51 @@ export default function BuildingInstanced({
     document.body.style.cursor = '';
   };
   const onClick = (e: ThreeEvent<MouseEvent>) => {
-    // R3F decorates pointerup with `delta` = manhattan distance the
-    // pointer moved since pointerdown. Anything > a few pixels is a
-    // camera-rotate drag, not a deliberate click.
-    if ((e as unknown as { delta?: number }).delta && (e as unknown as { delta: number }).delta > 5) return;
+    if (
+      (e as unknown as { delta?: number }).delta &&
+      (e as unknown as { delta: number }).delta > 5
+    ) {
+      return;
+    }
     const id = e.instanceId;
     if (id == null) return;
     const bi = indexMap.current.near[id];
     if (bi == null) return;
-    // Clear hover state + pointer cursor before navigation so the
-    // destination page doesn't inherit a stuck hover label or pointer.
     document.body.style.cursor = '';
     setHovered(null);
     onSelect?.(buildings[bi].username);
   };
 
-  // Allocate the instanced meshes with the maximum possible count for
-  // each bucket. In the worst case every building is in one bucket, so
-  // size = buildings.length keeps us safe even if the camera flies far.
-  const max = buildings.length;
+  // Allocate the instanced meshes. Body buckets: one slot per building
+  // (worst case everyone lands in the same bucket). Crown bucket: one
+  // slot per verified user. Window banks: the exact length we
+  // pre-computed.
+  const maxBodies = buildings.length;
+  const maxCrowns = buildings.filter((b) => b.hasGoldCrown).length;
+  const maxStaticWin = Math.max(1, windowBanks.staticMatrices.length);
+  const maxPulseWin = Math.max(1, windowBanks.pulseMatrices.length);
 
   return (
     <group>
       {/* Near LOD body — interactive */}
       <instancedMesh
         ref={nearRef}
-        args={[undefined, undefined, max]}
+        args={[undefined, undefined, maxBodies]}
         material={nearMat}
         onPointerMove={onMove}
         onPointerOut={onOut}
         onClick={onClick}
-        castShadow
-        receiveShadow
+        frustumCulled
       >
         <boxGeometry args={[1, 1, 1]} />
-      </instancedMesh>
-
-      {/* Near LOD window-glow planes — non-interactive */}
-      <instancedMesh
-        ref={winRef}
-        args={[undefined, undefined, max]}
-        material={windowMat}
-      >
-        <planeGeometry args={[1, 1]} />
       </instancedMesh>
 
       {/* Mid LOD body */}
       <instancedMesh
         ref={midRef}
-        args={[undefined, undefined, max]}
+        args={[undefined, undefined, maxBodies]}
         material={midMat}
-        receiveShadow
+        frustumCulled
       >
         <boxGeometry args={[1, 1, 1]} />
       </instancedMesh>
@@ -407,20 +486,40 @@ export default function BuildingInstanced({
       {/* Far LOD body */}
       <instancedMesh
         ref={farRef}
-        args={[undefined, undefined, max]}
+        args={[undefined, undefined, maxBodies]}
         material={farMat}
+        frustumCulled
       >
         <boxGeometry args={[1, 1, 1]} />
       </instancedMesh>
 
-      {/* Gold crowns (near + verified) */}
+      {/* Window dots — static bank (non-animated users) */}
+      <instancedMesh
+        ref={winStaticRef}
+        args={[undefined, undefined, maxStaticWin]}
+        material={windowStaticMat}
+        frustumCulled
+      >
+        <boxGeometry args={[0.12, 0.12, 0.12]} />
+      </instancedMesh>
+
+      {/* Window dots — pulsing bank (animated users) */}
+      <instancedMesh
+        ref={winPulseRef}
+        args={[undefined, undefined, maxPulseWin]}
+        material={windowPulseMat}
+        frustumCulled
+      >
+        <boxGeometry args={[0.12, 0.12, 0.12]} />
+      </instancedMesh>
+
+      {/* Gold crowns (verified) */}
       <instancedMesh
         ref={crownRef}
-        args={[undefined, undefined, max]}
+        args={[undefined, undefined, Math.max(1, maxCrowns)]}
         material={crownMat}
-        castShadow
+        frustumCulled
       >
-        {/* Cone with 4 segments reads as a chunky pyramid */}
         <coneGeometry args={[1, 1, 4]} />
       </instancedMesh>
     </group>

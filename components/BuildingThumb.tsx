@@ -2,6 +2,7 @@
 
 import { Canvas, useThree } from '@react-three/fiber';
 import { Suspense, useEffect, useMemo } from 'react';
+import * as THREE from 'three';
 import Building from './Building';
 import type { BuildingProps, Theme } from '@/lib/types';
 import { useInView } from '@/lib/useInView';
@@ -84,9 +85,10 @@ export default function BuildingThumb({
 }
 
 /**
- * Zero-cost silhouette fallback. Shows a building-shaped block in
- * theme-accent color so the row doesn't feel broken while the real
- * canvas is out-of-view. Uses CSS only — no Three.js / WebGL.
+ * Zero-cost silhouette fallback. Shows a building-shaped block in the
+ * theme's deep-dark body color with a few emissive-cyan dots so the
+ * row doesn't feel broken while the real canvas is out-of-view. Uses
+ * CSS only — no Three.js / WebGL.
  */
 function ThumbPlaceholder({
   building,
@@ -100,8 +102,34 @@ function ThumbPlaceholder({
   // Crude silhouette: a rectangle sized proportionally to the building's
   // height/width ratio. The tallest buildings render as tall thin bars.
   const aspect = Math.min(1, building.width / Math.max(building.height, 1));
-  const barWidth = Math.max(size * 0.25, size * aspect * 0.5);
+  const barWidth = Math.max(size * 0.22, size * aspect * 0.5);
   const barHeight = Math.min(size - 10, size * 0.6 + building.height * 0.5);
+  // Tiny "window pixels" sprinkled over the bar give the silhouette a
+  // hint of the real rendered look.
+  const rows = Math.max(3, Math.floor(barHeight / 10));
+  const cols = 3;
+  const dots: React.ReactNode[] = [];
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const lit = ((r * 31 + c * 17 + building.username.charCodeAt(0)) % 5) < 3;
+      if (!lit) continue;
+      dots.push(
+        <span
+          key={`${r}-${c}`}
+          style={{
+            position: 'absolute',
+            left: `${((c + 0.5) / cols) * 100}%`,
+            top: `${((r + 0.5) / rows) * 100}%`,
+            width: 2,
+            height: 2,
+            background: theme.windowGlow,
+            transform: 'translate(-50%, -50%)',
+            boxShadow: `0 0 3px ${theme.windowGlow}`,
+          }}
+        />,
+      );
+    }
+  }
   return (
     <div
       aria-hidden
@@ -114,8 +142,11 @@ function ThumbPlaceholder({
           height: barHeight,
           background: building.color,
           border: `1px solid ${theme.gridLine}`,
+          position: 'relative',
         }}
-      />
+      >
+        {dots}
+      </div>
     </div>
   );
 }
@@ -139,9 +170,11 @@ function ThumbCanvas({
     [building],
   );
 
-  // Frame the camera so the building comfortably fills a small square.
+  // Frame the camera so the narrow tower fills the square without
+  // cropping the crown or the base. The thumb looks best from a slight
+  // downward angle so the window dots are visible on the front facade.
   const frame = Math.max(building.height, building.width * 2);
-  const camDist = frame * 0.95;
+  const camDist = Math.max(4, frame * 1.1);
 
   const motionOk =
     typeof window === 'undefined' ||
@@ -157,20 +190,26 @@ function ThumbCanvas({
       gl={{ antialias: false, alpha: true, powerPreference: 'low-power' }}
       style={{ width: size, height: size, background: 'transparent' }}
       camera={{
-        position: [camDist * 0.75, building.height * 0.6 + 1, camDist],
-        fov: 35,
+        position: [camDist * 0.55, building.height * 0.55 + 2, camDist],
+        fov: 32,
         near: 0.1,
         far: 200,
       }}
-      onCreated={({ camera }) => {
+      onCreated={({ gl, camera }) => {
+        gl.toneMapping = THREE.ACESFilmicToneMapping;
+        gl.toneMappingExposure = 1.0;
         camera.lookAt(0, building.height / 2, 0);
       }}
     >
       <Suspense fallback={null}>
-        <ambientLight intensity={0.7} />
+        {/* Low ambient + cool-white key → dark body with clear
+            silhouette. The emissive window dots do the heavy lifting
+            visually, same as the main city scene. */}
+        <ambientLight intensity={0.3} />
         <directionalLight
           position={[frame, frame * 1.4, frame * 0.8]}
-          intensity={1.1}
+          intensity={0.9}
+          color="#cfd8ff"
         />
         <Building
           building={centered}

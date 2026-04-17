@@ -91,15 +91,17 @@ export default function Hero3D({
     !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Frame the camera so the building fills the view regardless of its
-  // size. We compute a "size" metric (the max of width and height) and
-  // place the camera back enough that the tallest elonmusk-scale tower
-  // and the smallest newbie block both look good.
+  // size. For narrow-skyscraper aesthetics we bias toward a slightly
+  // further back + lower camera so the verticality reads, rather than
+  // flattening a tall account into a fat block.
   const frame = Math.max(building.height, building.width * 2);
-  // Distance tuned so a 15-unit-tall building at fov=45 fills ~75% of view.
-  const camDist = frame * 0.85;
+  // Distance tuned so a median account reads as a tall sliver and
+  // scholars of tweet volume (elonmusk, mrbeast, …) still fit head-to-
+  // toe at fov=45 with a little margin for the crown.
+  const camDist = Math.max(8, frame * 1.5);
   const camPos: [number, number, number] = [
-    camDist * 0.75,
-    building.height * 0.55 + 1,
+    camDist * 0.55,
+    Math.max(building.height * 0.45, 6),
     camDist,
   ];
   // Push fog PAST the building so the subject stays crisp; only the
@@ -121,7 +123,6 @@ export default function Hero3D({
       >
         <Suspense fallback={null}>
           <Canvas
-            shadows
             dpr={[1, 1.5]}
             gl={{ antialias: false, powerPreference: 'high-performance' }}
             camera={{
@@ -132,6 +133,8 @@ export default function Hero3D({
             }}
             onCreated={({ gl, camera }) => {
               gl.outputColorSpace = THREE.SRGBColorSpace;
+              gl.toneMapping = THREE.ACESFilmicToneMapping;
+              gl.toneMappingExposure = 1.0;
               camera.lookAt(0, building.height / 2, 0);
             }}
             style={{ width: size, height: size, background: backgroundOverride ?? theme.background }}
@@ -141,27 +144,20 @@ export default function Hero3D({
             <fog attach="fog" args={[theme.fog, fogNear, fogFar]} />
 
             {/* ─── Lights ───────────────────────────────────────────────── */}
-            {/* Higher ambient on the hero page than on the city — we only
-                have one subject so we want it legible, not moody. */}
-            <ambientLight intensity={0.7} />
+            {/* Keep ambient low so the dark body stays dark; a single
+                cool-white key gives it a silhouette gradient, and a
+                faint accent fill keeps the shadow side from going pure
+                black. The emissive window dots carry most of the
+                visual weight. */}
+            <ambientLight intensity={0.35} />
             <directionalLight
               position={[frame * 0.8, frame * 1.6, frame * 0.6]}
-              intensity={1.2}
-              castShadow
-              shadow-mapSize-width={512}
-              shadow-mapSize-height={512}
-              shadow-camera-near={1}
-              shadow-camera-far={frame * 6}
-              shadow-camera-left={-frame}
-              shadow-camera-right={frame}
-              shadow-camera-top={frame}
-              shadow-camera-bottom={-frame}
+              intensity={0.9}
+              color="#cfd8ff"
             />
-            {/* Warm fill light from the accent direction so the
-                building's shadow side still reads a subtle theme tint. */}
             <directionalLight
               position={[-frame, frame * 0.8, -frame]}
-              intensity={0.3}
+              intensity={0.25}
               color={theme.buildingAccent}
             />
 
@@ -176,16 +172,15 @@ export default function Hero3D({
               speed={0.4}
             />
 
-            {/* ─── Ground plane + fade-out grid ─────────────────────────── */}
+            {/* ─── Ground plane + unified dark grid ─────────────────────── */}
             <mesh
               rotation={[-Math.PI / 2, 0, 0]}
-              receiveShadow
-              position={[0, 0, 0]}
+              position={[0, -0.05, 0]}
             >
               <planeGeometry args={[Math.max(200, frame * 10), Math.max(200, frame * 10)]} />
               <meshStandardMaterial
                 color={theme.ground}
-                roughness={0.95}
+                roughness={1}
                 metalness={0}
               />
             </mesh>
@@ -194,13 +189,15 @@ export default function Hero3D({
               cellSize={Math.max(2, frame / 12)}
               cellThickness={0.6}
               sectionSize={Math.max(10, frame / 2)}
-              sectionThickness={1.2}
+              sectionThickness={0.8}
               cellColor={theme.gridLine}
-              sectionColor={theme.buildingAccent}
+              // Unified — no neon section lines. Matches the main
+              // city's grid language so the hero feels like "one
+              // pulled-out block" of the wider metropolis.
+              sectionColor={theme.gridLine}
               fadeDistance={Math.max(60, frame * 3.5)}
               fadeStrength={1}
               infiniteGrid={false}
-              position={[0, 0.01, 0]}
             />
 
             {/* ─── Hero building (centered at origin) ───────────────────── */}
@@ -295,7 +292,7 @@ function CosmeticOverlays({
             <meshStandardMaterial
               color={antenna.preview}
               emissive={antenna.preview}
-              emissiveIntensity={0.6}
+              emissiveIntensity={0.45}
               metalness={0.7}
               roughness={0.2}
             />
@@ -306,7 +303,7 @@ function CosmeticOverlays({
             <meshStandardMaterial
               color={antenna.preview}
               emissive={antenna.preview}
-              emissiveIntensity={1.3}
+              emissiveIntensity={0.9}
             />
           </mesh>
         </group>

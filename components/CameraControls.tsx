@@ -6,6 +6,14 @@ import * as THREE from 'three';
 
 interface CameraControlsProps {
   defaultPosition?: [number, number, number];
+  /** Where the camera looks on reset / landing. */
+  defaultTarget?: [number, number, number];
+  /** If set, the first ~1.5s plays a gentle ease from `landingStart`
+   *  down to `defaultPosition`. Used on the homepage to sell the
+   *  "dropping into the city" feel. */
+  landingStart?: [number, number, number];
+  /** Landing duration in seconds. */
+  landingDuration?: number;
 }
 
 /**
@@ -17,18 +25,22 @@ interface CameraControlsProps {
  *                                     relative to the camera's yaw
  *   Q / E · Space / Shift           → translate up / down
  *   Mouse drag (LMB held)            → yaw + pitch (pitch clamped to ±85°)
- *   Mouse wheel                      → adjust move speed (clamped 5..80)
- *   R                                → snap back to defaultPosition + look at origin
+ *   Mouse wheel                      → adjust move speed (clamped 5..120)
+ *   R                                → snap back to defaultPosition + look at target
  *
  * Notes
  * -----
  *   - Uses THREE.Euler with order 'YXZ' so yaw never flips pitch.
  *   - Velocity is exponentially damped per frame for a smooth feel.
- *   - This component intentionally renders nothing; the HUD is drawn
- *     in the parent (Canvas siblings), so the controls stay pure logic.
+ *   - The optional landing animation plays once on mount and cannot be
+ *     re-triggered (we intentionally *don't* run it when `R` is
+ *     pressed — reset should be instant).
  */
 export default function CameraControls({
-  defaultPosition = [0, 45, 60],
+  defaultPosition = [0, 110, 150],
+  defaultTarget = [0, 10, 0],
+  landingStart,
+  landingDuration = 1.5,
 }: CameraControlsProps) {
   const { camera, gl } = useThree();
 
@@ -39,17 +51,43 @@ export default function CameraControls({
   const yawPitch = useRef(new THREE.Euler(0, 0, 0, 'YXZ'));
   const targetVel = useRef(new THREE.Vector3());
   const vel = useRef(new THREE.Vector3());
-  const speed = useRef(20);
+  const speed = useRef(28);
+
+  // Landing state (used only when `landingStart` is provided).
+  const hasLanded = useRef(false);
+  const landingElapsed = useRef(0);
+  const landingFrom = useMemo(
+    () =>
+      new THREE.Vector3(
+        ...(landingStart ?? defaultPosition),
+      ),
+    [landingStart, defaultPosition],
+  );
+  const landingTo = useMemo(
+    () => new THREE.Vector3(...defaultPosition),
+    [defaultPosition],
+  );
 
   // Initialise pose on mount + handle reset (R)
   useEffect(() => {
-    const reset = () => {
-      camera.position.set(...defaultPosition);
-      camera.lookAt(0, 0, 0);
+    const snapTo = (pos: [number, number, number]) => {
+      camera.position.set(...pos);
+      camera.lookAt(...defaultTarget);
       yawPitch.current.setFromQuaternion(camera.quaternion, 'YXZ');
       vel.current.set(0, 0, 0);
     };
-    reset();
+    // Open on the landing start (if any) so the ease reads correctly.
+    snapTo(landingStart ?? defaultPosition);
+    // If no landing animation is requested, mark as landed immediately.
+    hasLanded.current = !landingStart;
+
+    const reset = () => {
+      // R is an instant snap — no landing animation. Also cancel any
+      // in-flight landing so the user can bail out of it.
+      hasLanded.current = true;
+      landingElapsed.current = landingDuration;
+      snapTo(defaultPosition);
+    };
 
     const onKeyDown = (e: KeyboardEvent) => {
       keys.current[e.code] = true;
@@ -65,7 +103,8 @@ export default function CameraControls({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [camera, defaultPosition]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camera, defaultPosition, defaultTarget, landingStart, landingDuration]);
 
   // Mouse drag (yaw/pitch) + wheel (speed)
   useEffect(() => {
@@ -89,16 +128,16 @@ export default function CameraControls({
       const sens = 0.0035;
       yawPitch.current.y -= dx * sens;
       yawPitch.current.x -= dy * sens;
-      // Clamp pitch to ±85°
       const max = THREE.MathUtils.degToRad(85);
       yawPitch.current.x = Math.max(-max, Math.min(max, yawPitch.current.x));
       camera.quaternion.setFromEuler(yawPitch.current);
+      // User input cancels the landing ease (they want control NOW).
+      hasLanded.current = true;
     };
     const onWheel = (e: WheelEvent) => {
-      // Shift speed by -/+ on wheel; keep it within sensible bounds.
       speed.current = Math.max(
         5,
-        Math.min(80, speed.current - Math.sign(e.deltaY) * 2),
+        Math.min(120, speed.current - Math.sign(e.deltaY) * 2),
       );
     };
 
@@ -121,8 +160,26 @@ export default function CameraControls({
   const fwd = useMemo(() => new THREE.Vector3(), []);
   const right = useMemo(() => new THREE.Vector3(), []);
   const up = useMemo(() => new THREE.Vector3(0, 1, 0), []);
+  const tmpPos = useMemo(() => new THREE.Vector3(), []);
 
   useFrame((_, delta) => {
+    // ---- Landing ease ---------------------------------------------------
+    // Interpolate from landingFrom → landingTo over `landingDuration`s
+    // with an ease-out-cubic curve. Re-points `lookAt` at the target
+    // every frame so the camera decelerates smoothly into framing.
+    if (!hasLanded.current) {
+      landingElapsed.current += delta;
+      const raw = Math.min(1, landingElapsed.current / landingDuration);
+      const e = 1 - Math.pow(1 - raw, 3); // ease-out cubic
+      tmpPos.lerpVectors(landingFrom, landingTo, e);
+      camera.position.copy(tmpPos);
+      camera.lookAt(...defaultTarget);
+      yawPitch.current.setFromQuaternion(camera.quaternion, 'YXZ');
+      // Disable WASD input during the landing so users don't fight it.
+      if (raw >= 1) hasLanded.current = true;
+      return;
+    }
+
     // Build a target velocity from the WASD/arrow/QE/Space-Shift state.
     targetVel.current.set(0, 0, 0);
 
@@ -131,8 +188,6 @@ export default function CameraControls({
     const r = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
     const u = (k.KeyE || k.Space ? 1 : 0) - (k.KeyQ || k.ShiftLeft || k.ShiftRight ? 1 : 0);
 
-    // Forward = camera-look direction projected to y=0 plane (so W moves
-    // the camera horizontally, never burying us underground).
     camera.getWorldDirection(fwd);
     fwd.y = 0;
     fwd.normalize();
@@ -143,8 +198,10 @@ export default function CameraControls({
       .addScaledVector(right, r * speed.current)
       .addScaledVector(up, u * speed.current);
 
-    // Critically-damped lerp toward the target velocity (factor = damping*dt)
-    const damping = 12;
+    // Critically-damped lerp toward the target velocity. Reduced damping
+    // (8 vs. previous 12) lets WASD input feel glide-y in the much
+    // larger city footprint.
+    const damping = 8;
     vel.current.lerp(targetVel.current, Math.min(1, damping * delta));
 
     camera.position.addScaledVector(vel.current, delta);

@@ -18,6 +18,16 @@ import ActivityFeed from './ActivityFeed';
 import WebGLFallback from './WebGLFallback';
 import CanvasErrorBoundary from './CanvasErrorBoundary';
 
+/** Default camera pose — a bird's-eye look toward downtown. */
+const CAM_DEFAULT: [number, number, number] = [0, 110, 150];
+/** Where the camera looks on load / reset. Slightly above ground so the
+ *  horizon sits a touch higher than middle and the skyline reads as
+ *  cinematic rather than top-down. */
+const CAM_TARGET: [number, number, number] = [0, 10, 0];
+/** Camera origin at first mount — slightly further out and higher,
+ *  so the 1.5s ease-in feels like *dropping in* to the city. */
+const CAM_LANDING_START: [number, number, number] = [0, 200, 220];
+
 /**
  * The 3D city scene. Owns the Canvas, the lighting + sky + ground, and
  * the instanced city. UI chrome (top bar, activity feed, HUD) lives as
@@ -59,14 +69,7 @@ export default function City3D() {
     }
   }, []);
 
-  // Scroll-lock the document while the city scene is mounted. Previously
-  // `overflow:hidden` was global in globals.css and sub-pages opted out
-  // via a client `useEffect` — which meant sub-pages were briefly
-  // unscrollable on slow networks before React mounted. We invert that:
-  // the default is scrollable, and only the homepage locks. Using
-  // `useLayoutEffect` so the lock is applied before the browser paints,
-  // preventing a 1-frame flash where the user could scroll the city
-  // canvas off-screen.
+  // Scroll-lock the document while the city scene is mounted.
   useLayoutEffect(() => {
     const html = document.documentElement;
     const body = document.body;
@@ -87,76 +90,86 @@ export default function City3D() {
       <CanvasErrorBoundary fallback={<WebGLFallback forceVisible />}>
         <Suspense fallback={null}>
           <Canvas
-            shadows
             dpr={[1, 2]}
-            // Wide draw distance so a tall skyscraper across the city
-            // never pops out at the edge of the frustum.
-            camera={{ position: [0, 45, 60], fov: 60, near: 0.1, far: 600 }}
+            // Wide-horizon bird's-eye frame. FOV 50 (vs. the old 60)
+            // pulls the skyline wider without fish-eye on the edges.
+            // `far` is 1000 so the ring of buildings + starfield all
+            // stay inside the frustum.
+            camera={{ position: CAM_DEFAULT, fov: 50, near: 0.5, far: 1000 }}
             gl={{ antialias: false, powerPreference: 'high-performance' }}
             onCreated={({ gl }) => {
-              // Keep colors true to the theme palette
               gl.outputColorSpace = THREE.SRGBColorSpace;
+              // Cap the tone-mapping exposure so window dots bloom hot
+              // against the dark bodies without washing the whole
+              // scene. The window material opts out of tone mapping
+              // entirely.
+              gl.toneMapping = THREE.ACESFilmicToneMapping;
+              gl.toneMappingExposure = 1.0;
             }}
           >
             {/* Sky + atmosphere ----------------------------------------- */}
             <color attach="background" args={[theme.background]} />
-            <fog attach="fog" args={[theme.fog, 80, 400]} />
+            {/* Tighter fog: the far end hides the grid's fade-out edge
+                and pulls the skyline together. 60 → 280 so mid-near
+                buildings stay crisp, far ones dissolve into haze. */}
+            <fog attach="fog" args={[theme.fog, 60, 280]} />
 
-            {/* Lights — soft ambient + key directional with shadow casting */}
-            <ambientLight intensity={0.25} />
+            {/* Lights — ambient stays low so body silhouettes read dark,
+                the directional key gives the near-field buildings a
+                cool-white highlight on one side, and the hemisphere
+                fills in a faint sky tint on the shadow side. */}
+            <ambientLight intensity={0.18} />
             <directionalLight
-              position={[100, 200, 100]}
-              intensity={0.8}
-              castShadow
-              shadow-mapSize-width={1024}
-              shadow-mapSize-height={1024}
-              shadow-camera-near={1}
-              shadow-camera-far={500}
-              shadow-camera-left={-200}
-              shadow-camera-right={200}
-              shadow-camera-top={200}
-              shadow-camera-bottom={-200}
+              position={[120, 260, 80]}
+              intensity={0.5}
+              color="#cfd8ff"
+            />
+            <hemisphereLight
+              args={[theme.skyTop, theme.ground, 0.25]}
             />
 
-            {/* Distant starfield — drei wraps a buffer-geometry Points cloud */}
+            {/* Distant starfield */}
             <Stars
-              radius={250}
-              depth={100}
-              count={3000}
+              radius={400}
+              depth={120}
+              count={6000}
               factor={4}
               saturation={0}
               fade
-              speed={0.5}
+              speed={0.4}
             />
 
-            {/* Ground plane (theme-tinted) + grid overlay --------------- */}
+            {/* Ground plane — sits *below* the grid so the grid lines
+                read as subtle tracery over a continuous dark floor
+                rather than floating on empty space. */}
             <mesh
               rotation={[-Math.PI / 2, 0, 0]}
-              receiveShadow
-              position={[0, 0, 0]}
+              position={[0, -0.05, 0]}
             >
-              <planeGeometry args={[800, 800]} />
+              <planeGeometry args={[1200, 1200]} />
               <meshStandardMaterial
                 color={theme.ground}
-                roughness={0.95}
+                roughness={1}
                 metalness={0}
               />
             </mesh>
             <Grid
-              args={[600, 600]}
-              cellSize={2}
+              args={[1200, 1200]}
+              cellSize={3.2}
               cellThickness={0.6}
-              sectionSize={10}
-              sectionThickness={1.2}
+              sectionSize={32}
+              sectionThickness={0.8}
               cellColor={theme.gridLine}
-              sectionColor={theme.buildingAccent}
-              fadeDistance={300}
-              fadeStrength={1}
+              // Same as cellColor so we don't get neon "major" lines
+              // screaming through the scene — the ref shows a unified,
+              // near-invisible grid.
+              sectionColor={theme.gridLine}
+              fadeDistance={220}
+              fadeStrength={2}
               infiniteGrid={false}
-              position={[0, 0.01, 0]}
             />
 
-            {/* The city — instanced bodies + crowns + window planes ---- */}
+            {/* The city — instanced bodies + crowns + window dots ------ */}
             <BuildingInstanced
               buildings={buildings}
               theme={theme}
@@ -167,7 +180,12 @@ export default function City3D() {
             {hoverPosition && <BuildingLabel position={hoverPosition} />}
 
             {/* Camera controller (no visual output) */}
-            <CameraControls defaultPosition={[0, 45, 60]} />
+            <CameraControls
+              defaultPosition={CAM_DEFAULT}
+              defaultTarget={CAM_TARGET}
+              landingStart={CAM_LANDING_START}
+              landingDuration={1.5}
+            />
           </Canvas>
         </Suspense>
       </CanvasErrorBoundary>
