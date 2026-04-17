@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,13 @@ function formatCount(n: number): string {
  * Debounced search box (200 ms) that queries the (mock) Twitter API.
  * Selecting a result navigates to /u/[username]. Keyboard nav covers
  * ↑/↓/Enter/Esc — clicking outside also closes the dropdown.
+ *
+ * Accessibility
+ * -------------
+ * Exposes the ARIA combobox pattern: the wrapper is role="combobox",
+ * the dropdown is role="listbox", and each row is role="option". The
+ * highlighted row's id is mirrored onto `aria-activedescendant` so
+ * screen-readers announce it even though focus stays on the input.
  */
 export default function SearchBar() {
   const router = useRouter();
@@ -31,6 +39,13 @@ export default function SearchBar() {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Stable ids for aria-controls / aria-activedescendant wiring
+  const listboxId = useId();
+  const optionId = useCallback(
+    (username: string) => `${listboxId}-opt-${username}`,
+    [listboxId],
+  );
 
   // Debounce search
   useEffect(() => {
@@ -63,12 +78,23 @@ export default function SearchBar() {
     (u: TwitterStats) => {
       setOpen(false);
       setValue('');
+      // Clear results too — otherwise onFocus (with an empty input)
+      // would re-show the previous user's results, which is confusing.
+      setResults([]);
+      setHighlight(0);
       router.push(`/u/${u.username}`);
     },
     [router],
   );
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      // Clear + collapse so Escape fully dismisses the widget
+      setOpen(false);
+      setResults([]);
+      setHighlight(0);
+      return;
+    }
     if (!open || results.length === 0) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -79,15 +105,23 @@ export default function SearchBar() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       select(results[highlight]);
-    } else if (e.key === 'Escape') {
-      setOpen(false);
     }
   };
 
   const list = useMemo(() => results, [results]);
+  const activeId =
+    open && list[highlight] ? optionId(list[highlight].username) : undefined;
 
   return (
-    <div ref={wrapRef} className="relative w-full max-w-md">
+    <div
+      ref={wrapRef}
+      role="combobox"
+      aria-haspopup="listbox"
+      aria-expanded={open}
+      aria-owns={listboxId}
+      aria-controls={listboxId}
+      className="relative w-full max-w-md"
+    >
       <input
         type="text"
         value={value}
@@ -95,6 +129,10 @@ export default function SearchBar() {
         onFocus={() => results.length > 0 && setOpen(true)}
         onKeyDown={onKey}
         placeholder="search @handle…"
+        aria-label="Search Twitter handles"
+        aria-autocomplete="list"
+        aria-controls={listboxId}
+        aria-activedescendant={activeId}
         className={clsx(
           'w-full px-3 py-1.5 bg-bg-secondary/80 border-[2px] border-text-muted/40',
           'text-xs text-text-primary placeholder:text-text-muted/60',
@@ -102,45 +140,50 @@ export default function SearchBar() {
           'transition-colors',
         )}
       />
-      {open && list.length > 0 && (
-        <div
-          className={clsx(
-            'absolute left-0 right-0 top-full mt-1 z-30',
-            'bg-bg-primary/95 backdrop-blur border-[2px] border-accent-cyan',
-            'shadow-[2px_2px_0_0_#000] max-h-72 overflow-auto',
-          )}
-        >
-          {list.map((u, i) => (
-            <button
-              type="button"
-              key={u.username}
-              onMouseEnter={() => setHighlight(i)}
-              onMouseDown={(e) => {
-                // mouseDown so the input blur doesn't close us first
-                e.preventDefault();
-                select(u);
-              }}
-              className={clsx(
-                'w-full text-left px-3 py-2 flex items-center justify-between gap-3',
-                'text-xs',
-                i === highlight
-                  ? 'bg-accent-cyan/10 text-accent-cyan'
-                  : 'text-text-primary hover:bg-bg-secondary',
+      <div
+        id={listboxId}
+        role="listbox"
+        aria-label="Search results"
+        className={clsx(
+          'absolute left-0 right-0 top-full mt-1 z-30',
+          'bg-bg-primary/95 backdrop-blur border-[2px] border-accent-cyan',
+          'shadow-[2px_2px_0_0_#000] max-h-72 overflow-auto',
+          open && list.length > 0 ? 'block' : 'hidden',
+        )}
+      >
+        {list.map((u, i) => (
+          <button
+            type="button"
+            key={u.username}
+            id={optionId(u.username)}
+            role="option"
+            aria-selected={i === highlight}
+            onMouseEnter={() => setHighlight(i)}
+            onMouseDown={(e) => {
+              // mouseDown so the input blur doesn't close us first
+              e.preventDefault();
+              select(u);
+            }}
+            className={clsx(
+              'w-full text-left px-3 py-2 flex items-center justify-between gap-3',
+              'text-xs',
+              i === highlight
+                ? 'bg-accent-cyan/10 text-accent-cyan'
+                : 'text-text-primary hover:bg-bg-secondary',
+            )}
+          >
+            <span className="truncate">
+              @{u.username}
+              {u.verified && (
+                <span className="ml-1 text-accent-amber">★</span>
               )}
-            >
-              <span className="truncate">
-                @{u.username}
-                {u.verified && (
-                  <span className="ml-1 text-accent-amber">★</span>
-                )}
-              </span>
-              <span className="text-text-muted shrink-0">
-                {formatCount(u.followers)}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+            </span>
+            <span className="text-text-muted shrink-0">
+              {formatCount(u.followers)}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,17 @@
-import ComingSoon from '@/components/ComingSoon';
+import type { Metadata } from 'next';
+import { Suspense } from 'react';
+import UserPageClient from './page.client';
+
+export function generateMetadata({
+  params,
+}: {
+  params: { username: string };
+}): Metadata {
+  return {
+    title: `@${params.username} · TweetCity`,
+    description: `${params.username}'s 3D pixel-art building in TweetCity.`,
+  };
+}
 
 export default function UserPage({
   params,
@@ -6,9 +19,8 @@ export default function UserPage({
   params: { username: string };
 }) {
   return (
-    <ComingSoon
-      title={`@${params.username}`}
-      hint="Profile pages with stat breakdowns and a hero building render are next."
-    />
+    <Suspense fallback={null}>
+      <UserPageClient username={params.username} />
+    </Suspense>
   );
 }

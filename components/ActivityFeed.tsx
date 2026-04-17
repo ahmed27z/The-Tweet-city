@@ -12,6 +12,8 @@ const KIND_PREFIX: Record<ActivityEvent['kind'], string> = {
   kudos: '👏',
   verified: '⭐',
   streak: '💥',
+  claimed: '🏗',
+  referral: '🤝',
 };
 
 const KINDS: ActivityEvent['kind'][] = [

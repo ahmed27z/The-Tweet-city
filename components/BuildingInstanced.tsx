@@ -357,6 +357,10 @@ export default function BuildingInstanced({
     if (id == null) return;
     const bi = indexMap.current.near[id];
     if (bi == null) return;
+    // Clear hover state + pointer cursor before navigation so the
+    // destination page doesn't inherit a stuck hover label or pointer.
+    document.body.style.cursor = '';
+    setHovered(null);
     onSelect?.(buildings[bi].username);
   };
 

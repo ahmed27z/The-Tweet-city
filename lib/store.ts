@@ -1,9 +1,20 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ActivityEvent, ThemeId } from './types';
-import { DEFAULT_THEME } from './themes';
+import { DEFAULT_THEME, THEMES } from './themes';
 import { MOCK_USERS } from './mockData';
 
+/**
+ * Slice surface for the city store. Kept intentionally narrow so the
+ * rest of the app can `useCityStore(s => s.field)` with shallow-equal
+ * selectors without churning on unrelated changes.
+ *
+ * Phase 2 added:
+ *   - `claimed` / `referral` activity kinds (see makeMessage below)
+ *   - A `claimModalOpen` / `setClaimModalOpen` slice so any component
+ *     (TopBar avatar chip, profile "CLAIM" CTA, etc.) can open the
+ *     single global ClaimModal rendered once in app/layout.tsx.
+ */
 interface CityStore {
   theme: ThemeId;
   setTheme: (t: ThemeId) => void;
@@ -13,6 +24,16 @@ interface CityStore {
   setSelected: (u: string | null) => void;
   activity: ActivityEvent[];
   pushActivity: (e: ActivityEvent) => void;
+  /** Global claim-modal state (UI-only; not persisted). */
+  claimModalOpen: boolean;
+  setClaimModalOpen: (open: boolean) => void;
+  /**
+   * Pre-fill the claim modal with a handle. When the profile page
+   * triggers the modal we want the input seeded with whichever handle
+   * the viewer was looking at.
+   */
+  claimModalSeed: string | null;
+  setClaimModalSeed: (handle: string | null) => void;
 }
 
 const KINDS: ActivityEvent['kind'][] = [
@@ -29,9 +50,15 @@ const KIND_PREFIX: Record<ActivityEvent['kind'], string> = {
   kudos: '👏',
   verified: '⭐',
   streak: '💥',
+  claimed: '🏗',
+  referral: '🤝',
 };
 
-export function makeMessage(kind: ActivityEvent['kind'], username: string, target?: string): string {
+export function makeMessage(
+  kind: ActivityEvent['kind'],
+  username: string,
+  target?: string,
+): string {
   const prefix = KIND_PREFIX[kind];
   switch (kind) {
     case 'joined':
@@ -44,6 +71,10 @@ export function makeMessage(kind: ActivityEvent['kind'], username: string, targe
       return `${prefix} @${username} earned a gold crown`;
     case 'streak':
       return `${prefix} @${username} is on a 7-day streak`;
+    case 'claimed':
+      return `${prefix} @${username} claimed their building`;
+    case 'referral':
+      return `${prefix} @${username} accepted @${target ?? 'someone'}'s invite — both buildings glow tonight`;
     default:
       return `${prefix} @${username}`;
   }
@@ -84,12 +115,26 @@ export const useCityStore = create<CityStore>()(
       activity: seedActivity(),
       pushActivity: (e) =>
         set((s) => ({ activity: [e, ...s.activity].slice(0, 40) })),
+      claimModalOpen: false,
+      setClaimModalOpen: (open) => set({ claimModalOpen: open }),
+      claimModalSeed: null,
+      setClaimModalSeed: (handle) => set({ claimModalSeed: handle }),
     }),
     {
       name: 'tweetcity-store',
-      // Only persist the theme; activity & hovered/selected state stay
-      // ephemeral so each session feels alive.
+      // Only persist the theme; activity & hovered/selected/modal state
+      // stay ephemeral so each session feels alive.
       partialize: (s) => ({ theme: s.theme }),
+      version: 1,
+      // If localStorage hands us a theme id we don't recognise (e.g.
+      // a future version removed the theme, or the value is corrupt),
+      // fall back to DEFAULT_THEME so `THEMES[state.theme]` is always
+      // defined downstream.
+      onRehydrateStorage: () => (state) => {
+        if (state && !(state.theme in THEMES)) {
+          state.theme = DEFAULT_THEME;
+        }
+      },
     },
   ),
 );

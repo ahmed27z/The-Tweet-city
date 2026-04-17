@@ -3,14 +3,7 @@
 import { Canvas } from '@react-three/fiber';
 import { Grid, Stars } from '@react-three/drei';
 import { useRouter } from 'next/navigation';
-import {
-  Component,
-  type ReactNode,
-  Suspense,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useCityStore } from '@/lib/store';
 import { THEMES } from '@/lib/themes';
@@ -23,28 +16,7 @@ import CameraControls from './CameraControls';
 import TopBar from './TopBar';
 import ActivityFeed from './ActivityFeed';
 import WebGLFallback from './WebGLFallback';
-
-/**
- * Tiny error boundary so a thrown error inside the Canvas tree doesn't
- * blow up the whole page — we surface the WebGL fallback instead.
- */
-class CanvasErrorBoundary extends Component<
-  { children: ReactNode; fallback: ReactNode },
-  { hasError: boolean }
-> {
-  state = { hasError: false };
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-  componentDidCatch(err: unknown) {
-    // eslint-disable-next-line no-console
-    console.error('[TweetCity] canvas error', err);
-  }
-  render() {
-    if (this.state.hasError) return this.props.fallback;
-    return this.props.children;
-  }
-}
+import CanvasErrorBoundary from './CanvasErrorBoundary';
 
 /**
  * The 3D city scene. Owns the Canvas, the lighting + sky + ground, and
@@ -91,7 +63,7 @@ export default function City3D() {
 
   return (
     <div className="fixed inset-0">
-      <CanvasErrorBoundary fallback={<WebGLFallback />}>
+      <CanvasErrorBoundary fallback={<WebGLFallback forceVisible />}>
         <Suspense fallback={null}>
           <Canvas
             shadows

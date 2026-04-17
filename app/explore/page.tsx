@@ -1,10 +1,12 @@
-import ComingSoon from '@/components/ComingSoon';
+import type { Metadata } from 'next';
+import ExplorePageClient from './page.client';
+
+export const metadata: Metadata = {
+  title: 'Explore · TweetCity',
+  description:
+    'Browse neighbourhoods of the city — most active, most followed, verified, newest, and claimed.',
+};
 
 export default function ExplorePage() {
-  return (
-    <ComingSoon
-      title="explore"
-      hint="Curated tours of the city — neighbourhoods, factions, & vibes — Phase 2."
-    />
-  );
+  return <ExplorePageClient />;
 }

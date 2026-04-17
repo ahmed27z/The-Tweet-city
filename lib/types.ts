@@ -57,7 +57,7 @@ export interface Theme {
 
 export interface ActivityEvent {
   id: string;
-  kind: 'joined' | 'grew' | 'kudos' | 'verified' | 'streak';
+  kind: 'joined' | 'grew' | 'kudos' | 'verified' | 'streak' | 'claimed' | 'referral';
   username: string;
   target?: string; // for kudos
   timestamp: number;

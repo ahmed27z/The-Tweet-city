@@ -1,10 +1,17 @@
-import ComingSoon from '@/components/ComingSoon';
+import type { Metadata } from 'next';
+import { Suspense } from 'react';
+import LeaderboardPageClient from './page.client';
+
+export const metadata: Metadata = {
+  title: 'Leaderboard · TweetCity',
+  description:
+    'Tallest, widest, brightest and most-active buildings in TweetCity.',
+};
 
 export default function LeaderboardPage() {
   return (
-    <ComingSoon
-      title="leaderboard"
-      hint="Tallest, brightest, and most-active buildings ranked here in Phase 2."
-    />
+    <Suspense fallback={null}>
+      <LeaderboardPageClient />
+    </Suspense>
   );
 }

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Silkscreen } from 'next/font/google';
 import './globals.css';
+import GlobalModals from '@/components/GlobalModals';
 
 const silkscreen = Silkscreen({
   subsets: ['latin'],
@@ -26,7 +27,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={silkscreen.variable}>
-      <body className={silkscreen.variable}>{children}</body>
+      <body className={silkscreen.variable}>
+        {children}
+        <GlobalModals />
+      </body>
     </html>
   );
 }
